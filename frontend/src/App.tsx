@@ -1,4 +1,3 @@
-// src/App.tsx
 import React, { useState, useRef, useEffect } from "react";
 import Sidebar from "./components/sidebar";
 import { MapView } from "./components/map-view";
@@ -14,6 +13,42 @@ import { FiShare2, FiCalendar } from "react-icons/fi";
 import WelcomePage from "./components/WelcomePage";
 import ShareModal from "./components/ShareModal";
 import SampleGuides from "./components/sampleGuides";
+
+// Transform backend POI format to frontend format
+function transformBackendData(
+  backendItinerary: any[], 
+  location: string, 
+  theme: string
+): ItineraryDay[] {
+  return backendItinerary.map(day => {
+    // Separate restaurants from activities
+    const restaurants = day.activities.filter((activity: any) => 
+      activity.poi.types.includes("restaurant")
+    );
+    const activities = day.activities.filter((activity: any) => 
+      !activity.poi.types.includes("restaurant")
+    );
+
+    return {
+      day: day.day,
+      food: {
+        time: restaurants[0]?.time || "12:00 PM",
+        place: restaurants[0]?.poi.name || "Local Restaurant", 
+        cost: "$25",
+        lat: restaurants[0]?.poi.lat || 0,
+        lng: restaurants[0]?.poi.lng || 0
+      },
+      activities: activities.map((activity: any) => ({
+        time: activity.time,
+        place: activity.poi.name,
+        cost: "$20",
+        lat: activity.poi.lat,
+        lng: activity.poi.lng
+      })),
+      summary: `Explore ${location} with amazing ${theme} experiences!`
+    };
+  });
+}
 
 // Simplified event attributes interface for ics
 interface EventAttr {
@@ -67,7 +102,6 @@ const pad = (num: number): string => {
   return num.toString().padStart(2, "0");
 };
 
-// 地点数据类型
 interface LocationData {
   name: string;
   position: {
@@ -76,7 +110,6 @@ interface LocationData {
   };
 }
 
-// 提取位置信息函数
 const extractLocationsFromItinerary = (
   itineraryData: any[]
 ): LocationData[] => {
@@ -85,7 +118,6 @@ const extractLocationsFromItinerary = (
   if (!Array.isArray(itineraryData)) return locations;
 
   itineraryData.forEach((dayData) => {
-    // 添加食物地点
     if (
       dayData.food &&
       dayData.food.place &&
@@ -101,7 +133,7 @@ const extractLocationsFromItinerary = (
       });
     }
 
-    // 添加活动地点
+
     if (dayData.activities && Array.isArray(dayData.activities)) {
       dayData.activities.forEach((activity: any) => {
         if (activity.place && activity.lat && activity.lng) {
@@ -150,10 +182,6 @@ interface BudgetOption {
   value: string;
   label: string;
 }
-
-//
-// ——— Option Data ———
-//
 const mbtiOptions: OptionType[] = [
   { value: "INTJ", label: "INTJ" },
   { value: "INTP", label: "INTP" },
@@ -181,9 +209,7 @@ const budgetOptionsSelect: BudgetOption[] = [
   "2500+ USD",
 ].map((b) => ({ value: b, label: b }));
 
-//
-// ——— App Component ———
-//
+
 export default function App() {
   const [itinerary, setItinerary] = useState<ItineraryDay[]>([
     ...placeholderItinerary,
@@ -208,12 +234,8 @@ export default function App() {
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [showExplore, setShowExplore] = useState(false);
   const [isLocked, setIsLocked] = useState(false); // New state to track if inputs are locked
-
-  // 新增：加载状态
   const [isLoading, setIsLoading] = useState(false);
-  // 新增：地点数据 (用于地图显示)
   const [locations, setLocations] = useState<LocationData[]>([]);
-  // 新增：SessionID
   const [sessionId, setSessionId] = useState<string | null>(null);
 
   const sidebarDraggingRef = useRef(false);
@@ -272,32 +294,30 @@ export default function App() {
   };
 
   const handleSend = () => {
+    console.log("🚀 handleSend called!");
+    console.log("📝 Current fieldInput:", fieldInput);
+    
     if (!locationInput) {
       alert("Please enter a location before generating an itinerary.");
       return;
     }
-
+  
     if (!datesInput) {
-      alert(
-        "Please enter the length of your trip before generating an itinerary."
-      );
+      alert("Please enter the length of your trip before generating an itinerary.");
       return;
     }
-
-    // 设置加载状态为true
+    
     setIsLoading(true);
-
+  
     const payload = {
       mbti: mbti,
       budget: parseInt(budget.split(" ")[0]),
-      query: `Create a ${themeInput} themed trip to ${locationInput} for ${datesInput} days${
-        fieldInput ? ". I'm interested in " + fieldInput : ""
-      }`,
+      query: fieldInput,
       current_itinerary: null,
     };
-
+  
     console.log("Sending payload:", payload);
-
+  
     fetch("http://localhost:8000/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -306,46 +326,55 @@ export default function App() {
       .then((res) => {
         if (!res.ok) {
           return res.text().then((text) => {
-            console.error("API错误响应:", text);
-            throw new Error(`API返回错误: ${res.status} ${text}`);
+            console.error("API error response:", text);
+            throw new Error(`API returns error: ${res.status} ${text}`);
           });
         }
         return res.json();
       })
       .then((data) => {
-        console.log("收到API响应：", data);
-
-        // 存储会话ID
+        console.log("API response received:", data);
+      
         if (data.session_id) {
           setSessionId(data.session_id);
         }
+      
+        // Access the nested structure correctly
+        if (data.data && data.data.itinerary && data.data.itinerary.itinerary) {
+          const backendItinerary = data.data.itinerary.itinerary;  // The actual array
+          const apiResponse = data.data.itinerary; // Get metadata
+    
+       // Transform with location/theme from API response
+      const transformedItinerary = transformBackendData(
+        backendItinerary, 
+        apiResponse.location || locationInput,
+        apiResponse.theme || themeInput
+      );
+      setItinerary(transformedItinerary);
 
-        // 处理数据
-        if (data.data && Array.isArray(data.data)) {
-          // 设置行程数据
-          setItinerary(data.data);
-
-          // 从数据中提取位置信息用于地图
-          const locationData = extractLocationsFromItinerary(data.data);
-          setLocations(locationData);
-          console.log("提取的位置数据:", locationData);
-        } else {
-          console.warn("API返回的数据格式不符合预期:", data);
-        }
-      })
-      .catch((err) => {
-        console.error("请求错误:", err);
-        alert("获取行程失败，请稍后重试");
-      })
-      .finally(() => {
-        // 无论成功失败，都结束加载状态
-        setIsLoading(false);
-        // 锁定输入
-        setIsLocked(true);
-        setFieldInput("");
-      });
-  };
-
+      // Update UI with actual values from backend
+      setThemeInput(apiResponse.theme || themeInput);
+      setLocationInput(apiResponse.location || locationInput); 
+      setDatesInput(apiResponse.days ? apiResponse.days.toString() : datesInput);
+    
+      // Extract locations for map
+     const locationData = extractLocationsFromItinerary(transformedItinerary);
+     setLocations(locationData);
+     console.log("✅ Integration successful!");
+  } else {
+    console.warn("Unexpected data format:", data);
+  }
+  })
+  .catch((err) => {
+    console.error("Request error:", err);
+    alert("Failed to retrieve itinerary, please try again later");
+  })
+  .finally(() => {
+    setIsLoading(false);
+    setIsLocked(true);
+    setFieldInput("");
+  });
+};
   // Save welcome state to localStorage when it changes
   useEffect(() => {
     localStorage.setItem("showWelcome", JSON.stringify(showWelcome));
@@ -357,7 +386,6 @@ export default function App() {
     setShowExplore(false);
     // Reset locked state when starting a new chat
     setIsLocked(false);
-    // 重置为初始状态
     setItinerary([...placeholderItinerary]);
     setSessionId(null);
     setLocations([]);
@@ -610,7 +638,7 @@ export default function App() {
                       value={fieldInput}
                       onChange={(e) => setFieldInput(e.target.value)}
                       className="w-full p-4 pr-10 border border-gray-200 rounded-lg text-sm font-georgia"
-                      disabled={isLoading} // 加载时禁用输入
+                      disabled={isLoading}
                     />
                     <button
                       onClick={handleSend}
@@ -619,7 +647,7 @@ export default function App() {
                           ? "text-gray-300"
                           : "text-gray-400 hover:text-gray-600"
                       }`}
-                      disabled={isLoading} // 加载时禁用按钮
+                      disabled={isLoading}
                     >
                       {/* paper-plane arrow SVG */}
                       <svg
